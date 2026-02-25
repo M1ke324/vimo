@@ -1,18 +1,19 @@
 # VIMO
 
-**VIMO** is a personal rewrite of the [Kilo](https://github.com/antirez/kilo) text editor, featuring Vim-style motions. Developed entirely in **C**, this project serves as a deep dive into low-level programming and terminal manipulation.
+**VIMO** is a terminal-based text editor written in **C**. It started as a personal rewrite of the [Kilo](https://github.com/antirez/kilo) editor and is currently evolving into a modal editor with Vim-style navigation.
 
 ---
+
+### 📚 Learning Journey
+This project was built following the [Build Your Own Text Editor](https://viewsourcecode.org/snaptoken/kilo/) guide. 
+After completing the core tutorial, I am now independently extending the codebase to implement **Vim motions** and a custom internal logic for modal editing.
 
 ### 🚧 Project Status: Work in Progress
 
-- [x] **Full Kilo rewrite** (Complete)
-- [ ] **Vim motion implementation** (In Progress)
-- [ ] **Command mode support** (Planned)
-
-> **Note:** This is a hobby project developed in my spare time. Updates are steady, though progress depends on my current availability.
+- [x] **Core Kilo Implementation** (Completed via tutorial)
+- [ ] **Vim Motion Engine** (In Progress)
+- [ ] **Command Mode Support** (Planned)
 
 ---
 
-### Why VIMO?
-The primary goal of this project is to master **C** by building a functional tool from scratch, moving from a standard text buffer to a modal editing system inspired by Vim.
+> **Note:** This is a hobby project developed in my spare time. Progress is steady.
