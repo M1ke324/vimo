@@ -19,7 +19,7 @@
 
 /*** defines ***/
 
-#define KILO_VERSION "0.0.1"
+#define KILO_VERSION "0.1.1"
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define KILO_TAB_STOP 8
 
@@ -64,7 +64,7 @@ enum mode{
 	COMAND_MODE
 };
 
-const char* nameMode[]={"NORMAL MODE", "INSERT_MODE", "VISUAL MODE", "COMAND_MODE"};
+const char* nameMode[]={"NORMAL MODE", "INSERT MODE", "VISUAL MODE", "COMAND MODE"};
 
 /*** data ***/
 
@@ -139,8 +139,8 @@ char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
 char *C_HL_keywords[]={
 	"switch", "if", "while", "for", "break", "cotinue", "return", "else",
 	"struct", "union", "typedef", "static", "enum", "class", "case",
-
-	"int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|", NULL
+	"int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|",
+  NULL
 };
 
 struct editorSyntax HLDB[] = {
@@ -162,6 +162,11 @@ int numDigits(int n);
 
 /*** terminal ***/
 
+/*
+ * Scopo: Pulisce lo schermo, stampa il messaggio di errore di sistema (errno)
+ * preceduto da 's' e termina il programma con codice 1.
+ * Si appoggia a: write() per le sequenze di escape, perror(), exit().
+ */
 void die(const char *s){
 	//Clear terminal
 	write(STDOUT_FILENO,"\x1b[2J", 4);
@@ -171,11 +176,22 @@ void die(const char *s){
 	exit(1);
 }
 
+/*
+ * Scopo: Ripristina le impostazioni originali del terminale salvate in
+ * E.orig_termios. Registrata con atexit() per essere chiamata all'uscita.
+ * Si appoggia a: tcsetattr(), die().
+ */
 void disableRawMode(){
 	if(tcsetattr(STDIN_FILENO,TCSAFLUSH, &E.orig_termios) == -1)
 		die("tcsetattr");
 }
 
+/*
+ * Scopo: Salva le impostazioni correnti del terminale e lo mette in raw mode:
+ * niente echo, niente input canonico, niente segnali da tastiera, niente post-
+ * processing dell'output, read() con timeout di 1/10 s.
+ * Si appoggia a: tcgetattr(), tcsetattr(), atexit(disableRawMode), die().
+ */
 void enableRawMode(){
 	if(tcgetattr(STDIN_FILENO, &E.orig_termios) == -1)
 		die("tcgetattr");
@@ -198,6 +214,12 @@ void enableRawMode(){
 		die("tcsetattr");
 }
 
+/*
+ * Scopo: Attende la pressione di un tasto e la restituisce. Decodifica le
+ * sequenze di escape (frecce, Ctrl+frecce, Home, End, Del, PagUp, PagDown) nei
+ * valori di enum editorKey; ESC da solo restituisce ESC.
+ * Si appoggia a: read(), die().
+ */
 int editorReadKey(){
 	int nread;
 	char c;
@@ -280,6 +302,12 @@ int editorReadKey(){
 		return c;
 }
 
+/*
+ * Scopo: Chiede al terminale la posizione del cursore (sequenza \x1b[6n) e ne
+ * legge la risposta \x1b[righe;colonneR, scrivendo i valori in *rows e *cols.
+ * Restituisce 0 se ha successo, -1 in caso di errore.
+ * Si appoggia a: write(), read(), sscanf().
+ */
 int getCursorPosition(int *rows, int *cols){
 	char buf[32];
 	unsigned int i=0;
@@ -301,6 +329,13 @@ int getCursorPosition(int *rows, int *cols){
 	return 0;
 }
 
+/*
+ * Scopo: Ricava le dimensioni del terminale in righe e colonne. Usa
+ * ioctl(TIOCGWINSZ); se fallisce sposta il cursore nell'angolo in basso a
+ * destra e ne legge la posizione. Restituisce 0 se ha successo, -1 in caso di
+ * errore.
+ * Si appoggia a: ioctl(), write(), getCursorPosition().
+ */
 int getWindowSize(int *rows, int *cols){
 	struct winsize ws;
 
@@ -317,16 +352,27 @@ int getWindowSize(int *rows, int *cols){
 
 /*** syntax highlighting ***/
 
+/*
+ * Scopo: Indica se il carattere 'c' separa due parole (spazio, '\0' o un
+ * simbolo di punteggiatura/operatore). Usata per l'evidenziazione delle
+ * keyword/numeri e per lo spostamento a parole.
+ * Si appoggia a: isspace(), strchr().
+ */
 int is_separator(int c){
 	return isspace(c) || c=='\0' || strchr(",.()+-/*=~%<>[];",c) != NULL;
 }
 
+/*
+ * Scopo: Ricalcola l'array row->hl, cioe' il tipo di evidenziazione di ogni
+ * carattere di row->render (commenti, commenti multiriga, stringhe, numeri,
+ * keyword) secondo la sintassi in E.syntax. Se lo stato "commento multiriga
+ * aperto" della riga cambia, aggiorna ricorsivamente anche la riga successiva.
+ * Si appoggia a: is_separator(), editorUpdateSyntax() (ricorsione sulla riga
+ * seguente), realloc(), memset(), strncmp().
+ */
 void editorUpdateSyntax(erow *row){
-	printf("Before realloc: row->rsize = %d, row->hl = %p\n", row->rsize, row->hl);
 	row->hl = realloc(row->hl, row->rsize);
-	printf("After realloc: row->hl = %p\n", row->hl);
 	memset(row->hl, HL_NORMAL, row->rsize);
-	printf("After memset: completed successfully\n");
 
 	if(E.syntax == NULL)
 		return;
@@ -440,6 +486,11 @@ void editorUpdateSyntax(erow *row){
 		editorUpdateSyntax(&E.row[row->idx+1]);
 }
 
+/*
+ * Scopo: Converte un valore di enum editorHighlight nel codice colore ANSI di
+ * primo piano da usare a schermo.
+ * Si appoggia a: nessuna funzione.
+ */
 int editorSyntaxToColor(int hl){
 	switch(hl){
 		case HL_COMMENT:
@@ -460,6 +511,12 @@ int editorSyntaxToColor(int hl){
 	}
 }
 
+/*
+ * Scopo: Sceglie la sintassi da HLDB in base all'estensione o al nome di
+ * E.filename e la imposta in E.syntax; se la trova, ricalcola l'evidenziazione
+ * di tutte le righe gia' caricate.
+ * Si appoggia a: editorUpdateSyntax(), strrchr(), strcmp(), strstr().
+ */
 void editorSelectSyntaxHighlight(){
 	E.syntax=NULL;
 	if(E.filename == NULL)
@@ -490,6 +547,12 @@ void editorSelectSyntaxHighlight(){
 
 /*** row operations ***/
 
+/*
+ * Scopo: Converte l'indice 'cx' in row->chars nella corrispondente colonna
+ * 'rx' a schermo, tenendo conto dell'espansione dei TAB e della colonna dei
+ * numeri di riga (E.rowPadding).
+ * Si appoggia a: nessuna funzione.
+ */
 int editorRowCxToRx(erow *row, int cx){
 	int rx=0;
 	int j;
@@ -502,6 +565,12 @@ int editorRowCxToRx(erow *row, int cx){
 	return rx+E.rowPadding;
 }
 
+/*
+ * Scopo: Operazione inversa di editorRowCxToRx(): data una colonna 'rx' della
+ * riga renderizzata restituisce l'indice 'cx' corrispondente in row->chars,
+ * tenendo conto dei TAB. (Nota: qui E.rowPadding non viene considerato.)
+ * Si appoggia a: nessuna funzione.
+ */
 int editorRowRxToCx(erow *row, int rx){
 	int cur_rx=0;
 	int cx=0;
@@ -517,7 +586,13 @@ int editorRowRxToCx(erow *row, int rx){
 	return cx;
 }
 
-void editorUpdateRow(erow *row){Se la prendete a keplero un pane arabo
+/*
+ * Scopo: Rigenera row->render a partire da row->chars espandendo i TAB in
+ * spazi (fino al prossimo multiplo di KILO_TAB_STOP), aggiorna row->rsize e
+ * poi l'evidenziazione della riga.
+ * Si appoggia a: editorUpdateSyntax(), malloc(), free().
+ */
+void editorUpdateRow(erow *row){
 	int tabs =0;
 	int j;
 
@@ -546,6 +621,14 @@ void editorUpdateRow(erow *row){Se la prendete a keplero un pane arabo
 	editorUpdateSyntax(row);
 }
 
+/*
+ * Scopo: Inserisce una nuova riga in posizione 'at' con il contenuto 's' di
+ * lunghezza 'len', spostando in basso le righe successive e aggiornandone
+ * l'indice. Aggiorna il numero di righe, E.rowPadding e segna il file come
+ * modificato.
+ * Si appoggia a: editorUpdateRow(), numDigits(), realloc(), memmove(),
+ * memcpy().
+ */
 void editorInsertRow(int at, char *s, size_t len){
 	if(at<0 || at> E.numrows)
 		return;
@@ -572,12 +655,22 @@ void editorInsertRow(int at, char *s, size_t len){
 	E.dirty++;
 }
 
+/*
+ * Scopo: Libera la memoria allocata per una riga (render, chars e hl).
+ * Si appoggia a: free().
+ */
 void editorFreeRow(erow *row){
 	free(row->render);
 	free(row->chars);
 	free(row->hl);
 }
 
+/*
+ * Scopo: Elimina la riga in posizione 'at', compattando l'array E.row e
+ * aggiornando gli indici delle righe successive, il numero di righe,
+ * E.rowPadding e il flag di modifica.
+ * Si appoggia a: editorFreeRow(), numDigits(), memmove().
+ */
 void editorDelRow(int at){
 	if(at<0 || at>=E.numrows)
 		return;
@@ -590,6 +683,11 @@ void editorDelRow(int at){
 	E.dirty++;
 }
 
+/*
+ * Scopo: Inserisce il carattere 'c' nella riga in posizione 'at' (se 'at' non
+ * e' valido lo aggiunge in fondo) e aggiorna il render della riga.
+ * Si appoggia a: editorUpdateRow(), realloc(), memmove().
+ */
 void editorRowInsertChar(erow *row, int at, int c){
 	if(at<0||at>row->size)
 		at=row->size;
@@ -601,6 +699,12 @@ void editorRowInsertChar(erow *row, int at, int c){
 	E.dirty++;
 }
 
+/*
+ * Scopo: Aggiunge in fondo alla riga la stringa 's' di lunghezza 'len' e
+ * aggiorna il render della riga. Usata quando si unisce una riga alla
+ * precedente.
+ * Si appoggia a: editorUpdateRow(), realloc(), memcpy().
+ */
 void editorRowAppendString(erow *row, char *s, size_t len){
 	row->chars = realloc(row->chars, row->size+len+1);
 	memcpy(&row->chars[row->size], s, len);
@@ -610,6 +714,11 @@ void editorRowAppendString(erow *row, char *s, size_t len){
 	E.dirty++;
 }
 
+/*
+ * Scopo: Cancella il carattere in posizione 'at' della riga e aggiorna il
+ * render della riga.
+ * Si appoggia a: editorUpdateRow(), memmove().
+ */
 void editorRowDelChar(erow *row, int at){
 	if(at<0 || at >= row->size)
 		return;
@@ -619,20 +728,37 @@ void editorRowDelChar(erow *row, int at){
 	E.dirty++;
 }
 
+/*
+ * Scopo: (In sviluppo) Dovrebbe copiare in 'buffer' fino a 'nChars' caratteri
+ * della riga a partire da 'at', restituendo quanti caratteri mancano rispetto
+ * a quelli richiesti. Pensata per la futura funzione di copia.
+ * Si appoggia a: memcpy().
+ */
 int editorRowGetChars(erow *row, int at, int nChars, char *buffer){
   if(at<0 || at>=E.numrows)
-	  return;
+	  return 0; //NON SICURO DELLO 0
   int nCopy=(row->size-at<nChars)? row->size-at : nChars;
   memcpy(&row->chars[at], buffer, nCopy);
   return nChars-nCopy;
 }
 
 /*** editor operations ***/
+/*
+ * Scopo: (Da implementare) Dovra' creare/reinizializzare il buffer di copia
+ * E.copyBuffer.
+ * Si appoggia a: nessuna funzione per ora.
+ */
 void editorNewCopyBuffer(){
 
 }
 
 
+/*
+ * Scopo: Inserisce il carattere 'c' nella posizione del cursore e sposta il
+ * cursore a destra. Se il cursore e' sulla riga dopo l'ultima, crea prima una
+ * riga vuota.
+ * Si appoggia a: editorInsertRow(), editorRowInsertChar().
+ */
 void editorInsertChar(int c){
 	if(E.cy==E.numrows){
 		editorInsertRow(E.numrows,"", 0);
@@ -641,6 +767,13 @@ void editorInsertChar(int c){
 	E.cx++;
 }
 
+/*
+ * Scopo: Gestisce l'Invio: se il cursore e' a inizio riga inserisce una riga
+ * vuota sopra, altrimenti spezza la riga corrente portando il testo a destra
+ * del cursore su una nuova riga. Sposta il cursore all'inizio della riga
+ * successiva.
+ * Si appoggia a: editorInsertRow(), editorUpdateRow().
+ */
 void editorInsertNewLine(){
 	if(E.cx==0)
 		editorInsertRow(E.cy, "", 0);
@@ -656,6 +789,11 @@ void editorInsertNewLine(){
 	E.cx=0;
 }
 
+/*
+ * Scopo: Cancella il carattere a sinistra del cursore (backspace). Se il
+ * cursore e' a inizio riga, unisce la riga corrente alla precedente.
+ * Si appoggia a: editorRowDelChar(), editorRowAppendString(), editorDelRow().
+ */
 void editorDelChar(){
 	if(E.cy==E.numrows)
 		return;
@@ -676,6 +814,12 @@ void editorDelChar(){
 
 /*** fileI/O ***/
 
+/*
+ * Scopo: Concatena tutte le righe del file in un unico buffer allocato,
+ * separandole con '\n', e ne scrive la lunghezza in *buflen. Il chiamante deve
+ * liberare il buffer.
+ * Si appoggia a: malloc(), memcpy().
+ */
 void *editorRowsToString(int *buflen){
 	int totlen=0;
 	int j;
@@ -695,16 +839,28 @@ void *editorRowsToString(int *buflen){
 	return buf;
 }
 
+/*
+ * Scopo: Restituisce il numero di cifre decimali di 'n' (almeno 1). Usata per
+ * calcolare la larghezza della colonna dei numeri di riga.
+ * Si appoggia a: nessuna funzione.
+ */
 int numDigits(int n) {
     int count = 0;
     do {
         count++;
         n /= 10;
     } while (n != 0);
-    return count;
+    return 1+count; /* +1 to include the space*/
 }
 
 
+/*
+ * Scopo: Apre il file 'filename', ne carica ogni riga nell'editor (senza '\n'
+ * o '\r' finali), seleziona la sintassi in base al nome e aggiorna la
+ * larghezza della colonna dei numeri di riga.
+ * Si appoggia a: editorSelectSyntaxHighlight(), editorInsertRow(),
+ * numDigits(), die(), fopen(), getline(), fclose().
+ */
 void editorOpen(char *filename){
 	free(E.filename);
   	E.filename = strdup(filename);
@@ -728,10 +884,17 @@ void editorOpen(char *filename){
 	free(line);
 	fclose(fp);
 	E.rowPadding=numDigits(E.numrows);
-	E.screencols-=E.rowPadding;
+	/*E.screencols-=E.rowPadding;*/
 	E.dirty=0;
 }
 
+/*
+ * Scopo: Salva il contenuto dell'editor su disco. Se il file non ha un nome lo
+ * chiede all'utente. Mostra nella barra dei messaggi l'esito del salvataggio.
+ * Si appoggia a: editorPrompt(), editorSelectSyntaxHighlight(),
+ * editorRowsToString(), editorSetStatusMessage(), open(), ftruncate(),
+ * write(), close().
+ */
 void editorSave(){
 	if(E.filename==NULL){
 		E.filename=editorPrompt("Save as: %s (ESC to cancel)", NULL);
@@ -764,6 +927,14 @@ void editorSave(){
 
 /*** find ***/
 
+/*
+ * Scopo: Callback di editorPrompt() per la ricerca incrementale: a ogni tasto
+ * cerca 'query' nelle righe (in avanti con frecce destra/giu', indietro con
+ * sinistra/su, ricominciando dall'altro capo), sposta il cursore sulla
+ * corrispondenza e la evidenzia con HL_MATCH, ripristinando l'evidenziazione
+ * della corrispondenza precedente.
+ * Si appoggia a: editorRowRxToCx(), strstr(), malloc(), memcpy(), memset().
+ */
 void editorFindCallback(char *query, int key){
 	static int last_match = -1;
 	static int direction = 1;
@@ -788,7 +959,7 @@ void editorFindCallback(char *query, int key){
 	}else{
 		last_match=-1;
 		direction=1;
-	}	
+	}
 
 	if(last_match==-1) 
 		direction = 1;
@@ -818,6 +989,11 @@ void editorFindCallback(char *query, int key){
 	}
 }
 
+/*
+ * Scopo: Avvia la ricerca nel testo. Salva la posizione del cursore e dello
+ * scroll e, se l'utente annulla con ESC, la ripristina.
+ * Si appoggia a: editorPrompt() con editorFindCallback().
+ */
 void editorFind(){
 	int saved_cx = E.cx;
 	int saved_cy = E.cy;
@@ -846,6 +1022,11 @@ struct abuf{
 
 #define ABUF_INIT {NULL, 0}
 
+/*
+ * Scopo: Aggiunge 's' di lunghezza 'len' in fondo all'append buffer,
+ * ingrandendolo.
+ * Si appoggia a: realloc(), memcpy().
+ */
 void abAppend(struct abuf *ab, const char *s, int len){
 	
 	char *new = realloc(ab->b, ab->len + len);
@@ -858,12 +1039,22 @@ void abAppend(struct abuf *ab, const char *s, int len){
 	ab->len +=len;
 }
 
+/*
+ * Scopo: Libera la memoria dell'append buffer.
+ * Si appoggia a: free().
+ */
 void abFree(struct abuf *ab){
 	free(ab->b);
 }
 
 /*** output ***/
 
+/*
+ * Scopo: Calcola E.rx dalla posizione del cursore e aggiorna E.rowoff ed
+ * E.coloff in modo che il cursore resti sempre all'interno della parte di file
+ * visibile.
+ * Si appoggia a: editorRowCxToRx().
+ */
 void editorScroll(){
 	E.rx = E.cx+E.rowPadding;
 	if(E.cy<E.numrows){
@@ -884,23 +1075,34 @@ void editorScroll(){
 	}
 }
 
+/*
+ * Scopo: Scrive nell'append buffer le righe visibili del file: numero di riga,
+ * testo colorato secondo l'evidenziazione e caratteri di controllo mostrati in
+ * negativo. Per le righe oltre la fine del file disegna '~' e, se il file e'
+ * vuoto, il messaggio di benvenuto.
+ * Si appoggia a: abAppend(), editorSyntaxToColor(), snprintf().
+ */
 void  editorDrawRows(struct abuf *ab){
+  int textcols = E.screencols - E.rowPadding;
 	int y;
 	for(y=0;y<E.screenrows;y++){
 		int filerow=y+E.rowoff;
 		int clen;
 		char buf[32];
-		clen=snprintf(buf,sizeof(buf),"\x1b[1;32;40m%*d\x1b[m",E.rowPadding, filerow);
+    if(filerow==E.cy)
+      clen=snprintf(buf,sizeof(buf),"\x1b[1;32;48;5;240m%*d \x1b[m",E.rowPadding, filerow+1);
+    else
+      clen=snprintf(buf,sizeof(buf),"\x1b[1;32;40m%*d \x1b[m",E.rowPadding-1, filerow+1);
 		abAppend(ab, buf, clen);
 		if(filerow >= E.numrows){
-			if(E.numrows == 0 && y == E.screenrows/3){
+			if(E.numrow== 0 && y == E.screenrows/3){
 				char welcome [80];
-				int welcomelen =snprintf(welcome, sizeof(welcome), "kilo editor --version %s", KILO_VERSION);
+				int welcomelen =snprintf(welcome, sizeof(welcome), "vimo editor --version %s", KILO_VERSION);
 			
-				if(welcomelen > E.screencols)
-					welcomelen = E.screencols;
+				if(welcomelen > textcols)
+					welcomelen = textcols;
 			
-				int padding = (E.screencols - welcomelen)/2;
+				int padding = (textcols - welcomelen)/2;
 				if(padding){
 					abAppend(ab, "~", 1);
 					padding--;
@@ -915,10 +1117,10 @@ void  editorDrawRows(struct abuf *ab){
 		}else{
 
 			int len = E.row[filerow].rsize - E.coloff;
-			if(len<0) 
+			if(len<0)
 				len=0;
-			if(len > E.screencols)
-				len = E.screencols;
+			if(len > textcols)
+				len = textcols;
 			char *c=&E.row[filerow].render[E.coloff];
 			unsigned char *hl =&E.row[filerow].hl[E.coloff];
 			int current_color =-1;
@@ -958,6 +1160,12 @@ void  editorDrawRows(struct abuf *ab){
 	} 
 }
 
+/*
+ * Scopo: Scrive nell'append buffer la barra di stato (in negativo): a sinistra
+ * numero di righe, nome del file e flag di modifica; a destra modalita'
+ * corrente, tipo di file e riga corrente/totale.
+ * Si appoggia a: abAppend(), snprintf().
+ */
 void editorDrawStatusBar(struct abuf *ab){
 	abAppend(ab,"\x1b[7m", 4);
 	char status[80],rstatus[80];
@@ -974,11 +1182,11 @@ void editorDrawStatusBar(struct abuf *ab){
 						E.syntax ? E.syntax->filetype : "no ft",
 						E.cy+1,
 						E.numrows);
-	if(len>E.screencols+E.rowPadding) 
-		len = E.screencols+E.rowPadding;
+	if(len>E.screencols) 
+		len = E.screencols;
 	abAppend(ab, status, len);
-	while(len<E.screencols+E.rowPadding){
-		if(E.screencols+E.rowPadding-len==rlen){
+	while(len<E.screencols){
+		if(E.screencols-len==rlen){
 			abAppend(ab, rstatus, rlen);
 			break;
 		}else{
@@ -990,6 +1198,11 @@ void editorDrawStatusBar(struct abuf *ab){
 	abAppend(ab, "\r\n", 2);
 }
 
+/*
+ * Scopo: Scrive nell'append buffer la barra dei messaggi, mostrando
+ * E.statusmsg solo se e' stato impostato da meno di 5 secondi.
+ * Si appoggia a: abAppend(), time().
+ */
 void editorDrawMessageBar(struct abuf *ab){
 	abAppend(ab, "\x1b[K", 3);
 	int msglen=strlen(E.statusmsg);
@@ -999,6 +1212,14 @@ void editorDrawMessageBar(struct abuf *ab){
 		abAppend(ab, E.statusmsg, msglen);	
 }
 
+/*
+ * Scopo: Ridisegna l'intero schermo: costruisce in un append buffer righe,
+ * barra di stato e barra dei messaggi, posiziona il cursore (a linea in insert
+ * mode, a blocco altrimenti) e scrive tutto con una sola write() per evitare
+ * sfarfallii.
+ * Si appoggia a: editorScroll(), editorDrawRows(), editorDrawStatusBar(),
+ * editorDrawMessageBar(), abAppend(), abFree(), write().
+ */
 void editorRefreshScreen(){
 	editorScroll();
 
@@ -1020,11 +1241,19 @@ void editorRefreshScreen(){
 
 	//Show the cursor
 	abAppend(&ab,"\x1b[?25h", 4);
+  //show cursor as a line in insert mode
+  abAppend(&ab,(E.mode==INSERT_MODE)?"\x1b[6 q":"\x1b[2 q",5);
 
 	write(STDOUT_FILENO, ab.b ,ab.len);
 	abFree(&ab);
 }
 
+/*
+ * Scopo: Imposta il messaggio della barra dei messaggi con formattazione stile
+ * printf e ne memorizza l'istante, cosi' che venga mostrato per qualche
+ * secondo.
+ * Si appoggia a: vsnprintf(), time().
+ */
 void editorSetStatusMessage(const char *fmt, ...){
 	va_list ap;
 	va_start(ap, fmt);
@@ -1035,6 +1264,14 @@ void editorSetStatusMessage(const char *fmt, ...){
 
 /*** input ***/
 
+/*
+ * Scopo: Mostra 'prompt' nella barra dei messaggi e legge una stringa
+ * dall'utente fino a Invio (restituisce la stringa allocata, da liberare) o
+ * ESC (restituisce NULL). Se 'callback' non e' NULL la chiama dopo ogni tasto
+ * con il testo corrente e il tasto premuto.
+ * Si appoggia a: editorSetStatusMessage(), editorRefreshScreen(),
+ * editorReadKey(), callback, malloc(), realloc(), free().
+ */
 char *editorPrompt(char *prompt, void (*callback)(char *, int)){
 	size_t bufsize=128;
 	char *buf=malloc(bufsize);
@@ -1077,6 +1314,12 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)){
 	}
 }
 
+/*
+ * Scopo: Sposta il cursore di una posizione nella direzione indicata da 'key'
+ * (frecce). A sinistra/destra passa alla riga precedente/successiva ai bordi;
+ * alla fine riporta E.cx entro la lunghezza della nuova riga.
+ * Si appoggia a: nessuna funzione.
+ */
 void editorMoveCursor(int key){
 	erow *row=(E.cy>=E.numrows) ? NULL : &E.row[E.cy];
 
@@ -1120,6 +1363,11 @@ void editorMoveCursor(int key){
 	}
 }
 
+/*
+ * Scopo: Sposta il cursore a sinistra o a destra di una parola intera (come
+ * Ctrl+freccia), fermandosi all'inizio della parola o a fine riga.
+ * Si appoggia a: editorMoveCursor(), is_separator().
+ */
 //Accept only ARROW_RIGHT or ARROW_LEFT
 void editorMoveCursorSkippingWords(int key){
 	if(key!=ARROW_RIGHT && key!=ARROW_LEFT)
@@ -1141,6 +1389,16 @@ void editorMoveCursorSkippingWords(int key){
 
 /*** VIM MODE ***/
 
+/*
+ * Scopo: Legge un tasto e lo gestisce in INSERT MODE: inserisce caratteri e
+ * nuove righe, cancella, muove il cursore (frecce, Ctrl+frecce, Home/End,
+ * PagUp/PagDown), salva con Ctrl-S, esce con Ctrl-Q (con conferma se ci sono
+ * modifiche) e torna in NORMAL MODE con ESC.
+ * Si appoggia a: editorReadKey(), editorInsertNewLine(),
+ * editorSetStatusMessage(), editorSave(), editorMoveCursor(),
+ * editorMoveCursorSkippingWords(), editorDelChar(), editorInsertChar(),
+ * write(), exit().
+ */
 void editorProcessKeypressInsertMode(){
 
 	int c = editorReadKey();
@@ -1168,19 +1426,6 @@ void editorProcessKeypressInsertMode(){
 		
 		case CTRL_KEY('s'):
 			editorSave();
-			break;
-
-		case HOME_KEY:
-			E.cx = 0;
-			break;
-		
-		case END_KEY:
-			if(E.cy<E.numrows)
-				E.cx = E.row[E.cy].size;
-			break;
-
-		case CTRL_KEY('f'):
-			editorFind();
 			break;
 
 		case BACKSPACE:
@@ -1221,7 +1466,7 @@ void editorProcessKeypressInsertMode(){
 		case ARROW_RIGHT:
 			editorMoveCursor(c);
 			break;
-		
+
 		case CTRL_KEY('l'):
 			break;
 
@@ -1240,9 +1485,15 @@ enum comand{
 	INSERT = 'i',
 	APPEND = 'a',
 	APPENDBELOW = 'o',
-	VISUAL = 'v'
+	VISUAL = 'v',
+  FIND='/'
 };
 
+/*
+ * Scopo: Gestisce i comandi comuni a NORMAL e VISUAL MODE: Ctrl-Q per uscire
+ * (chiedendo conferma se ci sono modifiche non salvate) e Ctrl-S per salvare.
+ * Si appoggia a: editorSetStatusMessage(), editorSave(), write(), exit().
+ */
 void handleComonComand(int comand){
 	switch (comand) {
 		//exit
@@ -1261,9 +1512,29 @@ void handleComonComand(int comand){
 		case CTRL_KEY('s'):
 			editorSave();
 			break;
+
+		case HOME_KEY:
+			E.cx = 0;
+			break;
+		
+		case END_KEY:
+			if(E.cy<E.numrows)
+				E.cx = E.row[E.cy].size;
+			break;
+
+
 	}
 }
 
+/*
+ * Scopo: Esegue un comando in stile vim composto da comando + numero di
+ * ripetizioni ('movement') + direzione. Con NONE muove il cursore 'movement'
+ * volte (a parole se la direzione e' Ctrl+freccia); con DELETE cancella
+ * caratteri o righe nella direzione data (o la riga corrente se movement e'
+ * 0). COPY non e' ancora implementato.
+ * Si appoggia a: editorMoveCursor(), editorMoveCursorSkippingWords(),
+ * editorDelChar(), editorDelRow().
+ */
 void handleCommand(int comand, int movement, int direction){
 	switch (comand) {
 		case NONE:
@@ -1314,6 +1585,16 @@ void handleCommand(int comand, int movement, int direction){
 	}
 }
 
+/*
+ * Scopo: Legge un tasto e lo gestisce in NORMAL MODE (stile vim): cambio
+ * modalita' (i, a, o, v), ricerca (/), comandi d/dd e y, numero di ripetizioni
+ * e direzioni (h j k l w b o frecce). Comando e ripetizioni sono accumulati in
+ * variabili statiche tra un tasto e l'altro e mostrati nella barra dei
+ * messaggi.
+ * Si appoggia a: editorReadKey(), handleComonComand(), handleCommand(),
+ * editorMoveCursor(), editorInsertNewLine(), editorFind(),
+ * editorSetStatusMessage().
+ */
 void editorProcessKeypressNormalMode(){
 	int c = editorReadKey();
 	static int movement;
@@ -1348,6 +1629,10 @@ void editorProcessKeypressNormalMode(){
 			E.mode=VISUAL_MODE;
 			return;
 		
+		case FIND:
+			editorFind();
+			break;
+
 		//comand normal mode
 		case DELETE:
 			if(comand==DELETE){
@@ -1426,11 +1711,17 @@ void editorProcessKeypressNormalMode(){
 		editorSetStatusMessage("%c",comand);
 }
 
+/*
+ * Scopo: (In sviluppo) Legge un tasto e lo gestisce in VISUAL MODE. Per ora ha
+ * la stessa logica di comando/ripetizioni/direzione della NORMAL MODE; la
+ * selezione e la copia non sono ancora implementate.
+ * Si appoggia a: editorReadKey(), handleComonComand(), handleCommand(),
+ * editorSetStatusMessage().
+ */
 void editorProcessKeypressVisualMode(){
 	int c = editorReadKey();
 	static int startCx;
 	static int startCy;
-	static int in; //trak if i was already in visualmode or if is the first time I get in
 	static int comand;
 	static int movement;
 	
@@ -1441,6 +1732,7 @@ void editorProcessKeypressVisualMode(){
 	switch (c){
 		//cange mode
 		case ESC:
+			E.mode=NORMAL_MODE;
 			comand=NONE;
 			movement=0;
 			return;
@@ -1515,9 +1807,13 @@ void editorProcessKeypressVisualMode(){
 		editorSetStatusMessage("%c",comand);
 }
 
-
 /*** init ***/
-
+/*
+ * Scopo: Inizializza tutti i campi dello stato globale E e ricava le
+ * dimensioni del terminale, riservando due righe per la barra di stato e la
+ * barra dei messaggi.
+ * Si appoggia a: getWindowSize(), die().
+ */
 void initEditor(){
 	E.cx=0;
 	E.cy=0;
@@ -1533,25 +1829,34 @@ void initEditor(){
 	E.syntax=NULL;
 	E.mode=NORMAL_MODE;
 	E.quitTimes= KILO_QUIT_TIMES;
-	E.rowPadding=0;
   E.startVisualModeCy=-1;
   E.startVisualModeCx=-1;
-  E.copyBuffer=nullptr;
+  E.copyBuffer=NULL;
 
 	if(getWindowSize(&E.screenrows, &E.screencols) == -1)
 		die("getWindowSize");
-	E.screenrows-=2;
+  E.screenrows-=2;
+	E.rowPadding=numDigits(E.screenrows);
 }
 
 
 
+/*
+ * Scopo: Punto di ingresso: attiva la raw mode, inizializza l'editor, apre il
+ * file passato come argomento (se presente) ed esegue il ciclo principale che
+ * ridisegna lo schermo e gestisce i tasti in base alla modalita' corrente.
+ * Si appoggia a: enableRawMode(), initEditor(), editorOpen(),\x1b[1;32;40m%*d|\x1b[m
+ * editorSetStatusMessage(), editorRefreshScreen(),
+ * editorProcessKeypressNormalMode(), editorProcessKeypressInsertMode(),
+ * editorProcessKeypressVisualMode().
+ */
 int main(int argc, char * argv[]){
 	enableRawMode();
 	initEditor();
 	if(argc >= 2)
 		editorOpen(argv[1]);
 
-	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
+	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
 	while (1){
 		editorRefreshScreen();
